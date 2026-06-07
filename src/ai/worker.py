@@ -124,7 +124,7 @@ def run_ai_worker(model_path, source_type, video_filepath, data_queue, is_runnin
                             }))
                             
                             # Gọi truyền thông TCP gửi dữ liệu sang Robot (tương thích 100% giaothuc.py)
-                            send_coordinates_to_robot(class_name, center_x, center_y, data_queue)
+                            #send_coordinates_to_robot(class_name, center_x, center_y, data_queue)
                         
                     # Giải phóng bộ nhớ khi vật thể đi ra ngoài màn hình (cả biên trên và biên dưới)
                     if center_y > frame_height - 15 or center_y < 15:
