@@ -3,6 +3,7 @@ import cv2
 import time
 from ultralytics import YOLO
 from src import config
+from src.robot.communication import send_coordinates_to_robot
 
 def run_ai_worker(model_path, source_type, video_filepath, data_queue, is_running_check, conf, iou, device, tracker_type):
     """
@@ -31,6 +32,8 @@ def run_ai_worker(model_path, source_type, video_filepath, data_queue, is_runnin
     
     # Tập hợp các ID vật thể đã được xử lý gửi sang robot (để tránh trùng lặp)
     processed_ids = set()
+    # Lưu lịch sử tọa độ Y của vật thể để xác định sự kiện cắt vạch (line crossing)
+    object_history = {}
     
     # Thiết lập cấu hình tệp tin tracker của YOLO
     tracker_config = "bytetrack.yaml"
@@ -69,7 +72,8 @@ def run_ai_worker(model_path, source_type, video_filepath, data_queue, is_runnin
                 verbose=False
             )
         except Exception as e:
-            # Nếu chạy lần đầu chưa có vật thể nào, track có thể báo lỗi hoặc cảnh báo, xử lý an toàn
+            # Ghi nhận lỗi tracker lên UI log để chẩn đoán
+            data_queue.put(("log", f"⚠️ Lỗi YOLO track: {e}"))
             results = model.predict(source=frame, conf=conf, iou=iou, device=device, verbose=False)
 
         annotated_frame = frame.copy()
@@ -99,28 +103,35 @@ def run_ai_worker(model_path, source_type, video_filepath, data_queue, is_runnin
                 confidence = confidences[i]
                 
                 # --- Thuật toán Line Crossing (Cắt vạch) ---
-                # Nếu tâm vật thể vượt quá vạch line_y di chuyển từ trên xuống dưới
-                # và ID này chưa từng được gửi đi
+                # Chỉ kích hoạt sự kiện khi tâm vật thể thực sự cắt qua vạch từ trên xuống dưới
                 if obj_id is not None:
-                    # Vật thể bắt đầu đi qua vạch phát hiện
-                    if center_y >= line_y and obj_id not in processed_ids:
-                        processed_ids.add(obj_id)
-                        line_color = (0, 0, 255) # Đổi vạch sang màu đỏ (có vật thể cắt vạch)
+                    prev_y = object_history.get(obj_id)
+                    object_history[obj_id] = center_y
+                    
+                    if prev_y is not None:
+                        # Hỗ trợ cả hai hướng: Từ trên xuống dưới hoặc từ dưới lên trên
+                        is_crossing = (prev_y < line_y and center_y >= line_y) or (prev_y > line_y and center_y <= line_y)
+                        if is_crossing and obj_id not in processed_ids:
+                            processed_ids.add(obj_id)
+                            line_color = (0, 0, 255) # Đổi vạch sang màu đỏ (có vật thể cắt vạch)
+                            
+                            # Gửi thông tin cắt vạch về luồng UI xử lý tiếp
+                            data_queue.put(("target_crossed", {
+                                "id": obj_id,
+                                "class_name": class_name,
+                                "x": center_x,
+                                "y": center_y
+                            }))
+                            
+                            # Gọi truyền thông TCP gửi dữ liệu sang Robot (tương thích 100% giaothuc.py)
+                            send_coordinates_to_robot(class_name, center_x, center_y, data_queue)
                         
-                        # Gửi thông tin cắt vạch về luồng UI xử lý tiếp
-                        data_queue.put(("target_crossed", {
-                            "id": obj_id,
-                            "class_name": class_name,
-                            "x": center_x,
-                            "y": center_y
-                        }))
-                        
-                    # Giải phóng bộ nhớ: Xóa ID khỏi danh sách xử lý nếu vật thể đã đi hẳn ra ngoài màn hình
-                    # (Để đề phòng việc YOLO gán lại ID này sau thời gian dài)
-                    if center_y > frame_height - 15 and obj_id in processed_ids:
-                        # Giới hạn kích thước tập hợp tránh phình RAM
-                        if len(processed_ids) > 1000:
+                    # Giải phóng bộ nhớ khi vật thể đi ra ngoài màn hình (cả biên trên và biên dưới)
+                    if center_y > frame_height - 15 or center_y < 15:
+                        if obj_id in processed_ids:
                             processed_ids.remove(obj_id)
+                        if obj_id in object_history:
+                            del object_history[obj_id]
                 
                 # Thiết lập màu vẽ bounding box: Xanh lá nếu đã gắp/cắt vạch, Cam nếu chưa gắp
                 color = (0, 255, 0) if (obj_id in processed_ids) else (0, 165, 255)
@@ -148,6 +159,12 @@ def run_ai_worker(model_path, source_type, video_filepath, data_queue, is_runnin
         rgb_image = cv2.cvtColor(resized_frame, cv2.COLOR_BGR2RGB)
         data_queue.put(("image", rgb_image))
         
+        # Tránh phình bộ nhớ cho object_history và processed_ids khi chạy lâu
+        if len(object_history) > 1000:
+            active_ids = list(object_history.keys())[-500:]
+            object_history = {k: object_history[k] for k in active_ids}
+            processed_ids = {k for k in processed_ids if k in object_history}
+            
         # Kiểm soát tốc độ quét để ổn định CPU
         time.sleep(config.AI_LOOP_DELAY_SEC)
 

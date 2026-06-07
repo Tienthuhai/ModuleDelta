@@ -16,3 +16,7 @@ GLOBAL_COOLDOWN_SEC = 1.5
 
 # FPS điều khiển luồng AI (Khoảng thời gian delay giữa các frame)
 AI_LOOP_DELAY_SEC = 0.03
+
+# --- Cấu hình TCP/IP mặc định cho PLC/Robot (được đồng bộ từ GUI) ---
+PLC_IP = "127.0.0.1"
+PLC_PORT = 23

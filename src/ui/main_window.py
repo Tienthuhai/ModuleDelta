@@ -12,6 +12,7 @@ from src.ui.calibration_panel import CalibrationPanel
 from src.ui.statistics_panel import StatisticsPanel
 from src.ui.log_panel import LogPanel
 from src.ai.worker import run_ai_worker
+from src.robot.tcp_communication import PLCTCPClient
 from src import config
 
 class MainWindow(ctk.CTk):
@@ -32,8 +33,11 @@ class MainWindow(ctk.CTk):
         self.is_running = False
         self.data_queue = queue.Queue()
         
-        # Quản lý Serial Port
+        # Quản lý truyền thông (Serial & TCP)
         self.ser = None
+        self.tcp_client = None
+        self.connection_mode = None  # "SERIAL" hoặc "TCP"
+        
         self.matrix_calib = None # Sẽ được cập nhật từ CalibrationPanel
 
         # Cài đặt Grid hệ thống 3 cột chính
@@ -44,8 +48,8 @@ class MainWindow(ctk.CTk):
 
         # ---------------- KHỞI TẠO CÁC PANEL CON ----------------
         
-        # Cột 1 (Bên trái): Điều khiển và Kết nối Robot
-        self.left_frame = ctk.CTkFrame(self, fg_color="transparent")
+        # Cột 1 (Bên trái): Điều khiển và Kết nối Robot (Hỗ trợ cuộn tránh tràn màn hình)
+        self.left_frame = ctk.CTkScrollableFrame(self, fg_color="transparent")
         self.left_frame.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
         
         self.control_panel = ControlPanel(
@@ -53,15 +57,15 @@ class MainWindow(ctk.CTk):
             on_start_callback=self.start_system, 
             on_stop_callback=self.stop_system
         )
-        self.control_panel.pack(fill=ctk.BOTH, expand=True, pady=(0, 10))
+        self.control_panel.pack(fill=ctk.X, pady=(0, 10))
         
         self.robot_panel = RobotPanel(
             self.left_frame,
-            on_connect_callback=self.serial_connect,
-            on_disconnect_callback=self.serial_disconnect,
+            on_connect_callback=self.handle_connect,
+            on_disconnect_callback=self.handle_disconnect,
             on_send_manual_callback=self.serial_send_manual
         )
-        self.robot_panel.pack(fill=ctk.BOTH, expand=True)
+        self.robot_panel.pack(fill=ctk.X)
 
         # Cột 2 (Ở giữa): Live Camera và Nhật ký (Logs)
         self.center_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -91,7 +95,33 @@ class MainWindow(ctk.CTk):
         self.frame_count = 0
         self.update_gui()
 
-    # --- CALLBACK TRUYỀN THÔNG SERIAL ROBOT ---
+    # --- CALLBACK QUẢN LÝ TRUYỀN THÔNG ĐA GIAO THỨC (SERIAL / TCP) ---
+    def handle_connect(self, mode, *args):
+        """Điều hướng kết nối tương ứng với giao thức được chọn."""
+        if mode == "SERIAL":
+            port = args[0]
+            baudrate = args[1]
+            success = self.serial_connect(port, baudrate)
+            if success:
+                self.connection_mode = "SERIAL"
+            return success
+        elif mode == "TCP":
+            ip = args[0]
+            port = args[1]
+            success = self.tcp_connect(ip, port)
+            if success:
+                self.connection_mode = "TCP"
+            return success
+        return False
+
+    def handle_disconnect(self, mode):
+        """Điều hướng ngắt kết nối."""
+        if mode == "SERIAL":
+            self.serial_disconnect()
+        elif mode == "TCP":
+            self.tcp_disconnect()
+        self.connection_mode = None
+
     def serial_connect(self, port, baudrate):
         """Mở kết nối cổng Serial tới Robot Delta."""
         try:
@@ -113,18 +143,44 @@ class MainWindow(ctk.CTk):
             self.log_panel.log_robot("🔴 Đã ngắt kết nối cổng Serial.")
         self.ser = None
 
+    def tcp_connect(self, ip, port):
+        """Mở kết nối TCP Client tới PLC."""
+        try:
+            config.PLC_IP = ip
+            config.PLC_PORT = port
+            self.log_panel.log_robot(f"Đang thiết lập kết nối TCP tới PLC {ip}:{port}...")
+            self.tcp_client = PLCTCPClient(ip, port, log_queue=self.data_queue)
+            success = self.tcp_client.connect()
+            return success
+        except Exception as e:
+            msg = f"❌ Lỗi khởi chạy kết nối TCP: {e}"
+            self.log_panel.log_error(msg)
+            self.log_panel.log_robot(msg)
+            return False
+
+    def tcp_disconnect(self):
+        """Đóng kết nối TCP Client."""
+        if self.tcp_client:
+            self.tcp_client.disconnect()
+        self.tcp_client = None
+
     def serial_send_manual(self, x, y, z):
-        """Gửi lệnh di chuyển thủ công (Test) qua Serial."""
+        """Gửi lệnh di chuyển thủ công (Test) qua Serial hoặc TCP."""
         cmd = f"G0 X{x:.1f} Y{y:.1f} Z{z:.1f}"
         self.log_panel.log_robot(f"Gửi lệnh thủ công: {cmd}")
         
-        if self.ser and self.ser.is_open:
+        if self.connection_mode == "SERIAL" and self.ser and self.ser.is_open:
             try:
                 self.ser.write((cmd + "\n").encode())
             except Exception as e:
                 self.log_panel.log_error(f"Lỗi gửi lệnh thủ công Serial: {e}")
+        elif self.connection_mode == "TCP" and self.tcp_client and self.tcp_client.is_connected:
+            try:
+                self.tcp_client.send_data(cmd)
+            except Exception as e:
+                self.log_panel.log_error(f"Lỗi gửi lệnh thủ công TCP: {e}")
         else:
-            self.log_panel.log_robot("⚠️ Cảnh báo: Serial chưa kết nối! Chỉ hiển thị mô phỏng.")
+            self.log_panel.log_robot("⚠️ Cảnh báo: Chưa kết nối truyền thông! Chỉ hiển thị mô phỏng.")
 
     def update_calibration_matrix(self, matrix):
         """Cập nhật ma trận hiệu chuẩn tọa độ."""
@@ -225,21 +281,29 @@ class MainWindow(ctk.CTk):
                         
                     self.log_panel.log_ai(f"🎯 CẮT VẠCH: Vật thể ID {obj_id} ({cls_name}) tại tọa độ ảnh ({cx}, {cy})")
                     
-                    # Gửi tọa độ xuống Robot
+                    # Gửi tọa độ xuống Robot/PLC
                     cmd_to_send = f"ID:{obj_id},NHAN:{cls_name},X:{rx:.1f},Y:{ry:.1f}"
-                    self.log_panel.log_robot(f"Truyền tọa độ: {cmd_to_send}")
                     
-                    if self.ser and self.ser.is_open:
+                    if self.connection_mode == "SERIAL" and self.ser and self.ser.is_open:
                         try:
+                            self.log_panel.log_robot(f"Truyền tọa độ (Serial): {cmd_to_send}")
                             self.ser.write((cmd_to_send + "\n").encode())
                             self.statistics_panel.increment_sent()
                         except Exception as e:
                             self.log_panel.log_error(f"Lỗi gửi dữ liệu qua Serial: {e}")
                             self.statistics_panel.increment_rejected()
+                    elif self.connection_mode == "TCP" and self.tcp_client and self.tcp_client.is_connected:
+                        try:
+                            self.log_panel.log_robot(f"Truyền tọa độ (TCP): {cmd_to_send}")
+                            self.tcp_client.send_data(cmd_to_send)
+                            self.statistics_panel.increment_sent()
+                        except Exception as e:
+                            self.log_panel.log_error(f"Lỗi gửi dữ liệu qua TCP: {e}")
+                            self.statistics_panel.increment_rejected()
                     else:
                         # Chế độ mô phỏng
                         self.statistics_panel.increment_sent()
-                        self.log_panel.log_robot("⚠️ Cảnh báo: Serial chưa kết nối! Chỉ gửi mô phỏng.")
+                        self.log_panel.log_robot(f"⚠️ Mô phỏng gửi tọa độ ({self.connection_mode or 'Chưa kết nối'}): {cmd_to_send}")
                         
         except queue.Empty:
             pass
