@@ -216,8 +216,7 @@ class MainWindow(ctk.CTk):
                     lambda: self.is_running,
                     settings["conf"],
                     settings["iou"],
-                    settings["device"],
-                    settings["tracker"]
+                    settings["device"]
                 ),
                 daemon=True
             ).start()

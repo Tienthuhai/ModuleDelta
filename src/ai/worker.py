@@ -1,17 +1,104 @@
-# Module xử lý AI luồng ngầm (YOLOv8, OpenCV, Object Tracking & Line Crossing)
+# Module xử lý AI luồng ngầm (YOLOv8 predict + Centroid Counting - Không dùng Tracking)
 import cv2
 import time
+import math
 from ultralytics import YOLO
 from src import config
 from src.robot.communication import send_coordinates_to_robot
 
-def run_ai_worker(model_path, source_type, video_filepath, data_queue, is_running_check, conf, iou, device, tracker_type):
+
+# ---------------------------------------------------------------------------
+# CentroidCounter — Đếm vật thể qua vạch không dùng tracking ID
+#
+# Nguyên lý hoạt động:
+#   - Mỗi frame: model.predict() → danh sách bounding box không có ID
+#   - Ghép box frame-hiện-tại với box frame-trước bằng khoảng cách tâm
+#   - Nếu một vật thể (tâm) đã đi qua vạch: đánh dấu để không đếm lại
+#   - Mỗi vật thể "mới" (không khớp với track nào cũ) được gán ID nội bộ tăng dần
+# ---------------------------------------------------------------------------
+class CentroidCounter:
+    MAX_LOST   = 30   # Số frame giữ track sau khi không thấy (tránh mất khi bị che 1-2 frame)
+    MAX_DIST   = 300  # Khoảng cách pixel tối đa để ghép detection với track cũ
+
+    def __init__(self):
+        self._next_id   = 1
+        self._tracks    = {}   # id -> {"cx": int, "cy": int, "lost": int, "crossed": bool}
+
+    def update(self, detections, line_y):
+        """
+        Cập nhật tracks với danh sách detection mới.
+        detections: list of (cx, cy, class_name, confidence)
+        Trả về: list of (stable_id, cx, cy, class_name, confidence, just_crossed)
+        """
+        # Bước 1: Đánh dấu tất cả track hiện có là "chưa thấy trong frame này"
+        for t in self._tracks.values():
+            t["seen"] = False
+
+        results_out = []
+
+        # Bước 2: Ghép mỗi detection với track gần nhất
+        unmatched = list(detections)
+        for det in unmatched:
+            cx, cy, cls_name, conf = det
+            best_id, best_dist = None, self.MAX_DIST
+
+            for tid, t in self._tracks.items():
+                d = math.hypot(cx - t["cx"], cy - t["cy"])
+                if d < best_dist:
+                    best_dist = d
+                    best_id = tid
+
+            if best_id is not None:
+                # Khớp với track cũ → cập nhật vị trí
+                t = self._tracks[best_id]
+                prev_y = t["cy"]
+                t["cx"], t["cy"] = cx, cy
+                t["seen"] = True
+                t["lost"] = 0
+
+                # Kiểm tra cắt vạch
+                just_crossed = False
+                if not t["crossed"]:
+                    crossed = (prev_y < line_y and cy >= line_y) or (prev_y > line_y and cy <= line_y)
+                    if crossed:
+                        t["crossed"] = True
+                        just_crossed = True
+
+                results_out.append((best_id, cx, cy, cls_name, conf, just_crossed))
+            else:
+                # Không khớp track nào → tạo track mới
+                new_id = self._next_id
+                self._next_id += 1
+                self._tracks[new_id] = {
+                    "cx": cx, "cy": cy,
+                    "seen": True, "lost": 0,
+                    "crossed": False
+                }
+                results_out.append((new_id, cx, cy, cls_name, conf, False))
+
+        # Bước 3: Tăng bộ đếm lost cho track không thấy; xóa nếu quá già
+        to_delete = []
+        for tid, t in self._tracks.items():
+            if not t["seen"]:
+                t["lost"] += 1
+                if t["lost"] > self.MAX_LOST:
+                    to_delete.append(tid)
+        for tid in to_delete:
+            del self._tracks[tid]
+
+        return results_out
+
+    def clear(self):
+        self._tracks.clear()
+        self._next_id = 1
+
+
+def run_ai_worker(model_path, source_type, video_filepath, data_queue, is_running_check, conf, iou, device):
     """
     Hàm thực thi luồng phụ xử lý AI:
     - Đọc ảnh từ Camera/Video.
-    - Thực hiện dự đoán kèm bám vết (Object Tracking) bằng YOLOv8.
-    - Phát hiện sự kiện Line Crossing (Cắt vạch).
-    - Tách tác vụ resize và chuyển đổi hệ màu ảnh sang luồng phụ trước khi đẩy về UI.
+    - Phát hiện đối tượng bằng model.predict() (không tracking).
+    - Đếm vật thể qua vạch bằng CentroidCounter.
     """
     data_queue.put(("log", "🧠 Đang khởi tạo mô hình YOLOv8..."))
     try:
@@ -20,152 +107,133 @@ def run_ai_worker(model_path, source_type, video_filepath, data_queue, is_runnin
         data_queue.put(("log", f"❌ Lỗi nạp mô hình: {e}"))
         return
 
-    # Xác định nguồn phát (Webcam hoặc Video)
+    # Xác định nguồn phát
     media_source = config.CAMERA_INDEX if source_type == 0 else video_filepath
     cap = cv2.VideoCapture(media_source)
-    
+
     if source_type == 0:
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.CAMERA_WIDTH)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.CAMERA_HEIGHT)
 
     data_queue.put(("log", f"▶️ Đã kết nối nguồn hình ảnh: {media_source}"))
-    
-    # Tập hợp các ID vật thể đã được xử lý gửi sang robot (để tránh trùng lặp)
-    processed_ids = set()
-    # Lưu lịch sử tọa độ Y của vật thể để xác định sự kiện cắt vạch (line crossing)
-    object_history = {}
-    
-    # Thiết lập cấu hình tệp tin tracker của YOLO
-    tracker_config = "bytetrack.yaml"
-    if tracker_type == "BOT-SORT":
-        tracker_config = "botsort.yaml"
-        
-    data_queue.put(("log", f"⚙️ Sử dụng thiết bị: {device.upper()} | Thuật toán bám vết: {tracker_type}"))
+    data_queue.put(("log", f"⚙️ Sử dụng thiết bị: {device.upper()} | Chế độ: Phát hiện + Đếm vạch (Không tracking)"))
+
+    counter = CentroidCounter()
 
     while is_running_check():
-        start_time = time.time()
         ret, frame = cap.read()
         if not ret:
             if source_type == 1:
-                # Tự động lặp lại video nếu hết file
                 cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                counter.clear()
                 continue
             else:
                 data_queue.put(("log", "❌ Lỗi: Mất tín hiệu kết nối Camera!"))
                 break
 
         frame_height, frame_width = frame.shape[:2]
-        
-        # 1. Xác định vạch phát hiện (Trigger Line) chính giữa ảnh
         line_y = frame_height // 2
-        
-        # 2. Dự đoán và bám vết sử dụng model.track()
-        # persist=True để giữ vết ID qua các frame
+
+        # --- Phát hiện đối tượng (không tracking) ---
         try:
-            results = model.track(
+            results = model.predict(
                 source=frame,
-                persist=True,
                 conf=conf,
                 iou=iou,
                 device=device,
-                tracker=tracker_config,
                 verbose=False
             )
         except Exception as e:
-            # Ghi nhận lỗi tracker lên UI log để chẩn đoán
-            data_queue.put(("log", f"⚠️ Lỗi YOLO track: {e}"))
-            results = model.predict(source=frame, conf=conf, iou=iou, device=device, verbose=False)
+            data_queue.put(("log", f"⚠️ Lỗi YOLO predict: {e}"))
+            time.sleep(config.AI_LOOP_DELAY_SEC)
+            continue
 
-        annotated_frame = frame.copy()
-        
-        # Vẽ vạch trigger (Vùng bắt tín hiệu nét liền màu xanh dương)
-        # Khi có vật thể đang chạm vạch, đổi sang màu đỏ để trực quan
-        line_color = (255, 0, 0) # Mặc định: Xanh dương (BGR)
-        
-        # Kiểm tra hộp kết quả
+        # Chuyển kết quả predict thành danh sách (cx, cy, class_name, confidence)
+        detections = []
         if results and len(results) > 0 and results[0].boxes is not None:
             boxes = results[0].boxes
-            xyxy = boxes.xyxy.cpu().numpy()
-            
-            # Đọc danh sách ID được YOLO tracking gán cho mỗi vật thể
-            # Nếu không có ID (ví dụ chưa bám vết được), ta lấy mảng None
-            ids = boxes.id.cpu().numpy().astype(int) if boxes.id is not None else [None] * len(xyxy)
-            cls_ids = boxes.cls.cpu().numpy().astype(int)
+            xyxy        = boxes.xyxy.cpu().numpy()
+            cls_ids     = boxes.cls.cpu().numpy().astype(int)
             confidences = boxes.conf.cpu().numpy()
-            
             for i, box in enumerate(xyxy):
                 x_min, y_min, x_max, y_max = map(int, box)
-                center_x = (x_min + x_max) // 2
-                center_y = (y_min + y_max) // 2
-                
-                obj_id = ids[i]
-                class_name = model.names[cls_ids[i]]
-                confidence = confidences[i]
-                
-                # --- Thuật toán Line Crossing (Cắt vạch) ---
-                # Chỉ kích hoạt sự kiện khi tâm vật thể thực sự cắt qua vạch từ trên xuống dưới
-                if obj_id is not None:
-                    prev_y = object_history.get(obj_id)
-                    object_history[obj_id] = center_y
-                    
-                    if prev_y is not None:
-                        # Hỗ trợ cả hai hướng: Từ trên xuống dưới hoặc từ dưới lên trên
-                        is_crossing = (prev_y < line_y and center_y >= line_y) or (prev_y > line_y and center_y <= line_y)
-                        if is_crossing and obj_id not in processed_ids:
-                            processed_ids.add(obj_id)
-                            line_color = (0, 0, 255) # Đổi vạch sang màu đỏ (có vật thể cắt vạch)
-                            
-                            # Gửi thông tin cắt vạch về luồng UI xử lý tiếp
-                            data_queue.put(("target_crossed", {
-                                "id": obj_id,
-                                "class_name": class_name,
-                                "x": center_x,
-                                "y": center_y
-                            }))
-                            
-                            # Gọi truyền thông TCP gửi dữ liệu sang Robot (tương thích 100% giaothuc.py)
-                            #send_coordinates_to_robot(class_name, center_x, center_y, data_queue)
-                        
-                    # Giải phóng bộ nhớ khi vật thể đi ra ngoài màn hình (cả biên trên và biên dưới)
-                    if center_y > frame_height - 15 or center_y < 15:
-                        if obj_id in processed_ids:
-                            processed_ids.remove(obj_id)
-                        if obj_id in object_history:
-                            del object_history[obj_id]
-                
-                # Thiết lập màu vẽ bounding box: Xanh lá nếu đã gắp/cắt vạch, Cam nếu chưa gắp
-                color = (0, 255, 0) if (obj_id in processed_ids) else (0, 165, 255)
-                
-                # Vẽ bounding box và chấm tâm đối tượng
+                cx = (x_min + x_max) // 2
+                cy = (y_min + y_max) // 2
+                detections.append((cx, cy, model.names[cls_ids[i]], float(confidences[i])))
+
+        # --- Cập nhật counter, lấy kết quả ---
+        tracked = counter.update(detections, line_y)
+
+        # --- Vẽ kết quả lên frame ---
+        annotated_frame = frame.copy()
+        line_color = (255, 0, 0)  # Xanh dương mặc định
+
+        for (obj_id, cx, cy, cls_name, conf_val, just_crossed) in tracked:
+            # Lấy lại bbox từ danh sách detections theo khoảng cách tâm gần nhất
+            # (vẽ bounding box từ results gốc theo index)
+            pass
+
+        # Vẽ bounding box từ results gốc (không phụ thuộc vào counter)
+        if results and len(results) > 0 and results[0].boxes is not None:
+            boxes_raw = results[0].boxes
+            xyxy_raw  = boxes_raw.xyxy.cpu().numpy()
+            cls_raw   = boxes_raw.cls.cpu().numpy().astype(int)
+            conf_raw  = boxes_raw.conf.cpu().numpy()
+
+            for i, box in enumerate(xyxy_raw):
+                x_min, y_min, x_max, y_max = map(int, box)
+                cx = (x_min + x_max) // 2
+                cy = (y_min + y_max) // 2
+                cls_name  = model.names[cls_raw[i]]
+                conf_val  = conf_raw[i]
+
+                # Tìm stable_id và trạng thái tương ứng từ danh sách tracked
+                match_id      = None
+                just_crossed  = False
+                for (tid, tcx, tcy, tcls, tconf, tcrossed) in tracked:
+                    if abs(tcx - cx) < 5 and abs(tcy - cy) < 5:
+                        match_id     = tid
+                        just_crossed = tcrossed
+                        break
+
+                # Màu: xanh lá = đã đếm, cam = chưa qua vạch
+                is_crossed = (match_id is not None and
+                              match_id in counter._tracks and
+                              counter._tracks[match_id]["crossed"])
+                color = (0, 255, 0) if is_crossed else (0, 165, 255)
+
                 cv2.rectangle(annotated_frame, (x_min, y_min), (x_max, y_max), color, 2)
-                cv2.circle(annotated_frame, (center_x, center_y), 5, (0, 0, 255), -1)
-                
-                # Hiển thị text: Nhãn, ID bám vết và độ tin cậy
-                id_str = f"ID:{obj_id} " if obj_id is not None else ""
-                label = f"{id_str}{class_name} ({confidence:.2f})"
-                cv2.putText(annotated_frame, label, (x_min, y_min - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                cv2.circle(annotated_frame, (cx, cy), 5, (0, 0, 255), -1)
 
-        # Vẽ vạch trigger line lên màn hình camera
+                id_str = f"ID:{match_id} " if match_id is not None else ""
+                label  = f"{id_str}{cls_name} ({conf_val:.2f})"
+                cv2.putText(annotated_frame, label, (x_min, y_min - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+                # Gửi sự kiện cắt vạch
+                if just_crossed:
+                    line_color = (0, 0, 255)
+                    data_queue.put(("target_crossed", {
+                        "id": match_id,
+                        "class_name": cls_name,
+                        "x": cx,
+                        "y": cy
+                    }))
+                    # Gọi truyền thông TCP gửi dữ liệu sang Robot (tương thích 100% giaothuc.py)
+                    #send_coordinates_to_robot(cls_name, cx, cy, data_queue)
+
+        # Vẽ Trigger Line
         cv2.line(annotated_frame, (0, line_y), (frame_width, line_y), line_color, 3)
-        cv2.putText(annotated_frame, "TRIGGER LINE", (10, line_y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, line_color, 2)
+        cv2.putText(annotated_frame, "TRIGGER LINE", (10, line_y - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, line_color, 2)
 
-        # --- TỐI ƯU HÓA HIỆU NĂNG LUỒNG UI CHÍNH ---
-        # Resize ảnh hiển thị trực tiếp bằng C++ OpenCV trên luồng phụ
-        display_width = 640
+        # Resize + đẩy lên UI
+        display_width  = 640
         display_height = int(display_width * frame_height / frame_width)
-        resized_frame = cv2.resize(annotated_frame, (display_width, display_height))
-        
-        # Chuyển đổi định dạng màu sang RGB để tương thích Tkinter PIL
-        rgb_image = cv2.cvtColor(resized_frame, cv2.COLOR_BGR2RGB)
+        resized_frame  = cv2.resize(annotated_frame, (display_width, display_height))
+        rgb_image      = cv2.cvtColor(resized_frame, cv2.COLOR_BGR2RGB)
         data_queue.put(("image", rgb_image))
-        
-        # Tránh phình bộ nhớ cho object_history và processed_ids khi chạy lâu
-        if len(object_history) > 1000:
-            active_ids = list(object_history.keys())[-500:]
-            object_history = {k: object_history[k] for k in active_ids}
-            processed_ids = {k for k in processed_ids if k in object_history}
-            
-        # Kiểm soát tốc độ quét để ổn định CPU
+
         time.sleep(config.AI_LOOP_DELAY_SEC)
 
     cap.release()

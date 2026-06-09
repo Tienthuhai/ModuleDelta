@@ -59,7 +59,7 @@ class ControlPanel(ctk.CTkFrame):
         
         # Tiêu đề nhóm cấu hình AI
         ctk.CTkLabel(
-            self.ai_group, text="⚙️ Cấu Hình YOLOv8 & Device", font=ctk.CTkFont(size=12, weight="bold")
+            self.ai_group, text="⚙️ Cấu Hình YOLO & Device", font=ctk.CTkFont(size=12, weight="bold")
         ).pack(padx=10, pady=(5, 2), anchor="w")
         
         self.btn_load_model = ctk.CTkButton(
@@ -105,13 +105,6 @@ class ControlPanel(ctk.CTkFrame):
         self.slider_iou.set(0.45)
         self.slider_iou.pack(fill=ctk.X, padx=10, pady=5)
         
-        # Thuật toán Tracking
-        self.lbl_tracker = ctk.CTkLabel(self.slider_group, text="Thuật toán bám vết (Tracker):")
-        self.lbl_tracker.pack(padx=10, pady=(5, 0), anchor="w")
-        
-        self.tracker_combo = ctk.CTkComboBox(self.slider_group, values=["ByteTrack", "BOT-SORT", "Centroid Tracker"])
-        self.tracker_combo.set("ByteTrack")
-        self.tracker_combo.pack(fill=ctk.X, padx=10, pady=5)
 
         # ---------------- 4. NÚT ĐIỀU KHIỂN CHẠY/DỪNG ----------------
         self.action_group = ctk.CTkFrame(self, fg_color="transparent")
@@ -173,6 +166,5 @@ class ControlPanel(ctk.CTkFrame):
             "model_path": self.model_path,
             "device": "cuda" if "GPU" in self.device_segmented.get() else "cpu",
             "conf": self.slider_conf.get(),
-            "iou": self.slider_iou.get(),
-            "tracker": self.tracker_combo.get()
+            "iou": self.slider_iou.get()
         }

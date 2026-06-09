@@ -1,5 +1,4 @@
 import customtkinter as ctk
-from PIL import ImageTk
 
 class CameraPanel(ctk.CTkFrame):
     """
@@ -55,12 +54,13 @@ class CameraPanel(ctk.CTkFrame):
             font=ctk.CTkFont(size=11)
         )
         self.resolution_label.pack(side=ctk.RIGHT, padx=5)
-
+ 
     def update_image(self, pil_image):
         """Cập nhật frame ảnh mới lên màn hình."""
-        imgtk = ImageTk.PhotoImage(image=pil_image)
-        self.video_label.configure(image=imgtk, text="")
-        self.video_label.imgtk = imgtk  # Tránh Garbage Collector giải phóng hình ảnh
+        width, height = pil_image.size
+        ctk_image = ctk.CTkImage(light_image=pil_image, dark_image=pil_image, size=(width, height))
+        self.video_label.configure(image=ctk_image, text="")
+        self.video_label.imgtk = ctk_image  # Tránh Garbage Collector giải phóng hình ảnh
 
     def update_fps(self, fps):
         """Cập nhật chỉ số khung hình/giây."""

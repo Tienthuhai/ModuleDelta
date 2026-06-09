@@ -1,0 +1,8 @@
+# Custom ByteTrack settings for static conveyor belt
+tracker_type: bytetrack
+track_high_thresh: 0.5
+track_low_thresh: 0.1
+new_track_thresh: 0.6
+track_buffer: 60      # Số lượng frame giữ vết đối tượng khi bị mất dấu (tăng từ 30 lên 60)
+match_thresh: 0.5      # Ngưỡng khớp hộp IoU (giảm từ 0.8 xuống 0.5 để hỗ trợ FPS thấp, vật di chuyển nhanh giữa các frame)
+fuse_score: True       # Trộn điểm số tin cậy với khoảng cách IoU trước khi khớp (bắt buộc đối với các phiên bản ultralytics mới)
