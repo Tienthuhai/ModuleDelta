@@ -202,13 +202,37 @@ def run_ai_worker(model_path, source_type, video_filepath, data_queue, is_runnin
                               counter._tracks[match_id]["crossed"])
                 color = (0, 255, 0) if is_crossed else (0, 165, 255)
 
-                cv2.rectangle(annotated_frame, (x_min, y_min), (x_max, y_max), color, 2)
-                cv2.circle(annotated_frame, (cx, cy), 5, (0, 0, 255), -1)
+                cv2.rectangle(annotated_frame, (x_min, y_min), (x_max, y_max), color, 3)
+                cv2.circle(annotated_frame, (cx, cy), 7, (0, 0, 255), -1)
 
-                id_str = f"ID:{match_id} " if match_id is not None else ""
-                label  = f"{id_str}{cls_name} ({conf_val:.2f})"
-                cv2.putText(annotated_frame, label, (x_min, y_min - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                id_str   = f"ID:{match_id}" if match_id is not None else "ID:?"
+                line1    = f"{id_str}  {cls_name}  {conf_val:.2f}"
+                line2    = f"x:{cx} y:{cy}"
+
+                font       = cv2.FONT_HERSHEY_SIMPLEX
+                font_scale = 0.65
+                thickness  = 2
+                pad        = 6
+
+                (w1, h1), _ = cv2.getTextSize(line1, font, font_scale, thickness)
+                (w2, h2), _ = cv2.getTextSize(line2, font, font_scale, thickness)
+                box_w = max(w1, w2) + pad * 2
+                box_h = h1 + h2 + pad * 3
+
+                label_y = max(y_min - box_h - 4, 0)
+                overlay = annotated_frame.copy()
+                cv2.rectangle(overlay,
+                              (x_min, label_y),
+                              (x_min + box_w, label_y + box_h),
+                              (0, 0, 0), -1)
+                cv2.addWeighted(overlay, 0.55, annotated_frame, 0.45, 0, annotated_frame)
+
+                cv2.putText(annotated_frame, line1,
+                            (x_min + pad, label_y + pad + h1),
+                            font, font_scale, color, thickness)
+                cv2.putText(annotated_frame, line2,
+                            (x_min + pad, label_y + pad * 2 + h1 + h2),
+                            font, font_scale, (200, 200, 200), thickness)
 
                 # Gửi sự kiện cắt vạch
                 if just_crossed:
