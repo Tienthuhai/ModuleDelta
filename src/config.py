@@ -15,7 +15,7 @@ TRIGGER_OFFSET = 10        # Vùng bắt tín hiệu = mid_y - 10 đến mid_y +
 GLOBAL_COOLDOWN_SEC = 1.5
 
 # FPS điều khiển luồng AI (Khoảng thời gian delay giữa các frame)
-AI_LOOP_DELAY_SEC = 0.03
+AI_LOOP_DELAY_SEC = 0.033   # Target ~30 FPS (1/30 ≈ 0.0333s mỗi frame)
 
 # --- Cấu hình TCP/IP mặc định cho PLC/Robot (được đồng bộ từ GUI) ---
 PLC_IP = "127.0.0.1"

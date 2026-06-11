@@ -121,6 +121,7 @@ def run_ai_worker(model_path, source_type, video_filepath, data_queue, is_runnin
     counter = CentroidCounter()
 
     while is_running_check():
+        frame_start = time.time()  # Bắt đầu đồng hồ mỗi frame
         ret, frame = cap.read()
         if not ret:
             if source_type == 1:
@@ -258,7 +259,11 @@ def run_ai_worker(model_path, source_type, video_filepath, data_queue, is_runnin
         rgb_image      = cv2.cvtColor(resized_frame, cv2.COLOR_BGR2RGB)
         data_queue.put(("image", rgb_image))
 
-        time.sleep(config.AI_LOOP_DELAY_SEC)
+        # Giữ đúng nhịp 30 FPS: chỉ sleep phần thời gian còn lại sau khi xử lý
+        elapsed = time.time() - frame_start
+        remaining = config.AI_LOOP_DELAY_SEC - elapsed
+        if remaining > 0:
+            time.sleep(remaining)
 
     cap.release()
     data_queue.put(("log", "⏹️ Đã dừng giải phóng Camera."))
