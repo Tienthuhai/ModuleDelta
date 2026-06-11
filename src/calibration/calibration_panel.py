@@ -36,31 +36,52 @@ class CalibrationPanel(ctk.CTkFrame):
         # Cấu hình Layout cột chính
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
-        
-        # ---------------- TOP AREA: THANH CHUYỂN TAB ----------------
-        self.segmented_button = ctk.CTkSegmentedButton(
-            self,
-            values=["Chessboard Calibration", "Robot Calibration"],
-            command=self.on_tab_change,
-            font=ctk.CTkFont(family="Inter", size=12, weight="bold")
+
+        # ---------------- TOP AREA: CHỌN CHẾ ĐỘ CALIBRATION ----------------
+        self.mode_frame = ctk.CTkFrame(self)
+        self.mode_frame.grid(row=0, column=0, padx=10, pady=(8, 4), sticky="ew")
+        self.mode_frame.grid_columnconfigure((0, 1), weight=1)
+
+        ctk.CTkLabel(
+            self.mode_frame,
+            text="📐 Chế Độ Hiệu Chuẩn",
+            font=ctk.CTkFont(size=12, weight="bold")
+        ).grid(row=0, column=0, columnspan=2, padx=10, pady=(5, 2), sticky="w")
+
+        self.calib_mode_var = ctk.IntVar(value=0)  # 0 = Chessboard, 1 = Robot
+
+        self.rad_chessboard = ctk.CTkRadioButton(
+            self.mode_frame,
+            text="Chessboard",
+            variable=self.calib_mode_var,
+            value=0,
+            command=self.on_tab_change
         )
-        self.segmented_button.grid(row=0, column=0, padx=10, pady=8, sticky="ew")
-        self.segmented_button.set("Chessboard Calibration")
-        
-        # Khung chứa nội dung tab
+        self.rad_chessboard.grid(row=1, column=0, padx=10, pady=5, sticky="w")
+
+        self.rad_robot = ctk.CTkRadioButton(
+            self.mode_frame,
+            text="Robot Coords",
+            variable=self.calib_mode_var,
+            value=1,
+            command=self.on_tab_change
+        )
+        self.rad_robot.grid(row=1, column=1, padx=10, pady=5, sticky="w")
+
+        # Khung chứa nội dung từng chế độ
         self.tab_camera_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.tab_robot_frame = ctk.CTkFrame(self, fg_color="transparent")
-        
-        # Khởi tạo UI
+
+        # Khởi tạo UI cho từng chế độ
         self._init_camera_tab_ui()
         self._init_robot_tab_ui()
-        
-        # Hiển thị mặc định
+
+        # Hiển thị mặc định: Chessboard
         self.tab_camera_frame.grid(row=1, column=0, padx=5, pady=5, sticky="nsew")
 
-    def on_tab_change(self, tab_name):
-        """Chuyển đổi qua lại giữa các tab hiệu chuẩn."""
-        if tab_name == "Chessboard Calibration":
+    def on_tab_change(self):
+        """Chuyển đổi hiển thị nội dung theo chế độ được chọn (không mất dữ liệu)."""
+        if self.calib_mode_var.get() == 0:
             self.tab_robot_frame.grid_forget()
             self.tab_camera_frame.grid(row=1, column=0, padx=5, pady=5, sticky="nsew")
         else:
