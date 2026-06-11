@@ -185,7 +185,8 @@ class MainWindow(ctk.CTk):
     def update_calibration_matrix(self, matrix):
         """Cập nhật ma trận hiệu chuẩn tọa độ."""
         self.matrix_calib = matrix
-        self.log_panel.log_ai(f"Ma trận hiệu chuẩn cập nhật: ScaleX={matrix['scale_x']:.4f}")
+        self.log_panel.log_ai(f"✅ Ma trận Robot Calibration đã được nạp: ScaleX={matrix['scale_x']:.4f} | ScaleY={matrix['scale_y']:.4f}")
+        self.log_panel.log_ai("🟢 Hệ thống sẽ tự động áp dụng Calibration khi gửi tọa độ sang Robot.")
 
     # --- CALLBACK ĐIỀU KHIỂN CHẠY/DỪNG HỆ THỐNG AI ---
     def start_system(self):
@@ -271,14 +272,16 @@ class MainWindow(ctk.CTk):
                     
                     self.statistics_panel.increment_total()
                     
-                    # Chuyển đổi tọa độ qua hiệu chuẩn nếu có
-                    if self.matrix_calib:
+                    # Chuyển đổi tọa độ qua hiệu chuẩn nếu có ma trận hợp lệ
+                    if self.calibration_panel.has_valid_matrix():
                         rx, ry = self.calibration_panel.transform(cx, cy)
+                        coord_mode = "[CALIBRATED]"
                     else:
-                        # Tọa độ mặc định nếu chưa calib (giả lập scale 1:1)
+                        # Gửi trực tiếp tọa độ gốc (pixel) khi chưa có Calibration
                         rx, ry = float(cx), float(cy)
+                        coord_mode = "[RAW PIXEL]"
                         
-                    self.log_panel.log_ai(f"🎯 CẮT VẠCH: Vật thể ID {obj_id} ({cls_name}) tại tọa độ ảnh ({cx}, {cy})")
+                    self.log_panel.log_ai(f"🎯 CẮT VẠCH {coord_mode}: Vật thể ID {obj_id} ({cls_name}) tại ảnh ({cx}, {cy}) → Robot ({rx:.1f}, {ry:.1f})")
                     
                     # Gửi tọa độ xuống Robot/PLC
                     cmd_to_send = f"ID:{obj_id},NHAN:{cls_name},X:{rx:.1f},Y:{ry:.1f}"

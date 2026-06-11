@@ -586,6 +586,10 @@ class CalibrationPanel(ctk.CTkFrame):
             else:
                 messagebox.showerror("Thất bại", "Tệp tin không hợp lệ.")
 
+    def has_valid_matrix(self) -> bool:
+        """Kiểm tra xem đã có ma trận Robot Calibration hợp lệ chưa."""
+        return self.robot_calib.matrix is not None
+
     def transform(self, px_x, px_y):
         """Chuyển đổi tọa độ pixel camera sang tọa độ robot thực tế."""
         return self.robot_calib.transform(px_x, px_y)
