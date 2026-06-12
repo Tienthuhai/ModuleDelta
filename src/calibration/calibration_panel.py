@@ -1,3 +1,4 @@
+import cv2
 import customtkinter as ctk
 import numpy as np
 import os
@@ -32,7 +33,7 @@ class CalibrationPanel(ctk.CTkFrame):
         }
         
         self.chessboard_image_paths = []
-        
+        self._table_locked = False  # True khi hệ thống đang chạy
         # Cấu hình Layout cột chính
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
@@ -163,93 +164,110 @@ class CalibrationPanel(ctk.CTkFrame):
     # =========================================================================
     def _init_robot_tab_ui(self):
         self.tab_robot_frame.grid_columnconfigure(0, weight=1)
-        self.tab_robot_frame.grid_rowconfigure(1, weight=1) # Bảng dữ liệu điểm giãn nở
-        
+        self.tab_robot_frame.grid_rowconfigure(0, weight=1)
+
+        # Bọc toàn bộ nội dung trong CTkScrollableFrame ngoài để cuộn được
+        outer_scroll = ctk.CTkScrollableFrame(self.tab_robot_frame, fg_color="transparent")
+        outer_scroll.grid(row=0, column=0, sticky="nsew", padx=0, pady=0)
+        outer_scroll.grid_columnconfigure(0, weight=1)
+        robot_parent = outer_scroll
+
         # 2.1 Nhập điểm thủ công (Manual Point Inputs)
-        entry_group = ctk.CTkFrame(self.tab_robot_frame)
+        entry_group = ctk.CTkFrame(robot_parent)
         entry_group.grid(row=0, column=0, padx=5, pady=4, sticky="ew")
         entry_group.grid_columnconfigure((0, 1, 2, 3), weight=1)
-        
+
         ctk.CTkLabel(entry_group, text="Nhập tọa độ Pixel (x, y):", font=ctk.CTkFont(size=11, weight="bold")).grid(row=0, column=0, columnspan=2, sticky="w", padx=6, pady=(2, 0))
         ctk.CTkLabel(entry_group, text="Nhập tọa độ Robot (Xr, Yr):", font=ctk.CTkFont(size=11, weight="bold")).grid(row=0, column=2, columnspan=2, sticky="w", padx=6, pady=(2, 0))
-        
+
         self.entry_pixel_x = ctk.CTkEntry(entry_group, placeholder_text="Pixel X", width=65)
         self.entry_pixel_x.grid(row=1, column=0, padx=3, pady=4, sticky="ew")
-        
+
         self.entry_pixel_y = ctk.CTkEntry(entry_group, placeholder_text="Pixel Y", width=65)
         self.entry_pixel_y.grid(row=1, column=1, padx=3, pady=4, sticky="ew")
-        
+
         self.entry_robot_x = ctk.CTkEntry(entry_group, placeholder_text="Robot X", width=65)
         self.entry_robot_x.grid(row=1, column=2, padx=3, pady=4, sticky="ew")
-        
+
         self.entry_robot_y = ctk.CTkEntry(entry_group, placeholder_text="Robot Y", width=65)
         self.entry_robot_y.grid(row=1, column=3, padx=3, pady=4, sticky="ew")
-        
+
         self.btn_add_pt = ctk.CTkButton(
             entry_group, text="📍 Add Point", command=self.add_point_manually, fg_color="#10B981", hover_color="#059669", height=32
         )
         self.btn_add_pt.grid(row=2, column=0, columnspan=4, padx=5, pady=5, sticky="ew")
 
-        # 2.2 Bảng dữ liệu điểm (Point Data Table)
-        self.table_frame = ctk.CTkScrollableFrame(self.tab_robot_frame, height=130)
-        self.table_frame.grid(row=1, column=0, padx=5, pady=4, sticky="nsew")
+        # 2.2 Bảng dữ liệu điểm (Point Data Table) — chiều cao cố định, luôn hiển thị
+        # Label tiêu đề bảng
+        ctk.CTkLabel(
+            robot_parent,
+            text="📋 DANH SÁCH ĐIỂM HIỆU CHUẨN",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#FFD700"
+        ).grid(row=1, column=0, padx=8, pady=(6, 2), sticky="w")
+
+        self.table_frame = ctk.CTkScrollableFrame(robot_parent, height=160)
+        self.table_frame.grid(row=2, column=0, padx=5, pady=(0, 4), sticky="ew")
         self.table_row_widgets = []
-        
-        # 2.3 Thuật toán & Tính toán ma trận
-        calc_ctrl = ctk.CTkFrame(self.tab_robot_frame)
-        calc_ctrl.grid(row=2, column=0, padx=5, pady=4, sticky="ew")
+
+        # 2.3 Chỉ dùng Affine (NVKCalibration)
+        calc_ctrl = ctk.CTkFrame(robot_parent)
+        calc_ctrl.grid(row=3, column=0, padx=5, pady=4, sticky="ew")
         calc_ctrl.grid_columnconfigure((0, 1), weight=1)
-        
-        self.opt_algorithm = ctk.CTkOptionMenu(calc_ctrl, values=["Homography", "Affine"], height=32)
-        self.opt_algorithm.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
-        self.opt_algorithm.set("Homography")
-        
+
+        ctk.CTkLabel(
+            calc_ctrl,
+            text="Phương pháp: Affine (NVK)",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#00E5FF"
+        ).grid(row=0, column=0, padx=5, pady=5, sticky="w")
+
         self.btn_calc_matrix = ctk.CTkButton(
             calc_ctrl, text="📊 Calculate Matrix", command=self.calculate_robot_matrix, fg_color="#10B981", hover_color="#059669", height=32
         )
         self.btn_calc_matrix.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
-        
-        self.lbl_points_count = ctk.CTkLabel(calc_ctrl, text="Số lượng điểm: 0 / 9 (Tối thiểu 9 điểm)", font=ctk.CTkFont(size=11))
+
+        self.lbl_points_count = ctk.CTkLabel(calc_ctrl, text="Số lượng điểm: 0 / 3 (Tối thiểu 3 điểm)", font=ctk.CTkFont(size=11))
         self.lbl_points_count.grid(row=1, column=0, columnspan=2, sticky="w", padx=10, pady=1)
-        
-        self.txt_robot_matrix = ctk.CTkTextbox(calc_ctrl, height=90, font=("Consolas", 10), fg_color="#121212", text_color="#00E5FF")
+
+        self.txt_robot_matrix = ctk.CTkTextbox(calc_ctrl, height=80, font=("Consolas", 10), fg_color="#121212", text_color="#00E5FF")
         self.txt_robot_matrix.grid(row=2, column=0, columnspan=2, sticky="ew", padx=5, pady=4)
         self.txt_robot_matrix.insert("1.0", "Robot Matrix:\n[Chưa tính toán]")
         self.txt_robot_matrix.configure(state="disabled")
 
-        # 2.4 Verification Mode (Kiểm chứng thủ công bằng cách nhập Pixel)
-        verify_frame = ctk.CTkFrame(self.tab_robot_frame)
-        verify_frame.grid(row=3, column=0, padx=5, pady=4, sticky="ew")
+        # 2.4 Verification Mode
+        verify_frame = ctk.CTkFrame(robot_parent)
+        verify_frame.grid(row=4, column=0, padx=5, pady=4, sticky="ew")
         verify_frame.grid_columnconfigure((0, 1), weight=1)
-        
+
         ctk.CTkLabel(verify_frame, text="🔍 KIỂM CHỨNG TỌA ĐỘ (VERIFY)", font=ctk.CTkFont(size=11, weight="bold")).grid(row=0, column=0, columnspan=2, sticky="w", padx=8, pady=(2, 0))
-        
+
         self.entry_verify_px = ctk.CTkEntry(verify_frame, placeholder_text="Pixel X verify", height=28)
         self.entry_verify_px.grid(row=1, column=0, padx=4, pady=3, sticky="ew")
-        
+
         self.entry_verify_py = ctk.CTkEntry(verify_frame, placeholder_text="Pixel Y verify", height=28)
         self.entry_verify_py.grid(row=1, column=1, padx=4, pady=3, sticky="ew")
-        
+
         self.btn_verify_pt = ctk.CTkButton(verify_frame, text="🔍 Verify Point", command=self.verify_manual_point, height=28)
         self.btn_verify_pt.grid(row=2, column=0, columnspan=2, padx=4, pady=4, sticky="ew")
-        
+
         self.lbl_verify_result = ctk.CTkLabel(verify_frame, text="Robot (X, Y) dự kiến: --, --", font=ctk.CTkFont(size=11, weight="bold"))
         self.lbl_verify_result.grid(row=3, column=0, columnspan=2, sticky="w", padx=10, pady=1)
-        
+
         self.lbl_verify_error = ctk.CTkLabel(verify_frame, text="Sai số kiểm chứng: -- mm", font=ctk.CTkFont(size=11, slant="italic"))
         self.lbl_verify_error.grid(row=4, column=0, columnspan=2, sticky="w", padx=10, pady=1)
 
         # 2.5 Nút lưu nạp robot calib
-        robot_io = ctk.CTkFrame(self.tab_robot_frame, fg_color="transparent")
-        robot_io.grid(row=4, column=0, padx=5, pady=4, sticky="ew")
-        
+        robot_io = ctk.CTkFrame(robot_parent, fg_color="transparent")
+        robot_io.grid(row=5, column=0, padx=5, pady=4, sticky="ew")
+
         self.btn_save_robot = ctk.CTkButton(robot_io, text="💾 Save Robot", command=self.save_robot_calibration, height=32)
         self.btn_save_robot.pack(side=ctk.LEFT, expand=True, fill=ctk.X, padx=3)
-        
+
         self.btn_load_robot = ctk.CTkButton(robot_io, text="📂 Load Robot", command=self.load_robot_calibration, height=32)
         self.btn_load_robot.pack(side=ctk.RIGHT, expand=True, fill=ctk.X, padx=3)
-        
-        # Vẽ bảng điểm ban đầu sau khi tất cả các widget khác đã được khởi tạo
+
+        # Vẽ bảng điểm ban đầu
         self._refresh_point_table()
 
     # =========================================================================
@@ -384,66 +402,123 @@ class CalibrationPanel(ctk.CTkFrame):
         except ValueError:
             messagebox.showerror("Lỗi nhập liệu", "Tọa độ Pixel và Robot phải là số hợp lệ.")
             return
-            
+
         self.robot_calib.add_point(px, py, rx, ry)
-        
+
         # Xóa nội dung nhập
         self.entry_pixel_x.delete(0, ctk.END)
         self.entry_pixel_y.delete(0, ctk.END)
         self.entry_robot_x.delete(0, ctk.END)
         self.entry_robot_y.delete(0, ctk.END)
-        
+
         self._refresh_point_table()
 
     def _refresh_point_table(self):
-        """Vẽ lại bảng dữ liệu các điểm hiệu chuẩn."""
+        """Vẽ lại bảng dữ liệu các điểm hiệu chuẩn (có thể sửa trực tiếp)."""
         # Xóa các widget dòng cũ
         for widgets in self.table_row_widgets:
             for w in widgets:
-                w.destroy()
+                try:
+                    w.destroy()
+                except Exception:
+                    pass
         self.table_row_widgets.clear()
-        
+
         # Vẽ tiêu đề cột
-        headers = ["No.", "Px", "Py", "Rx", "Ry", "Act"]
+        headers = ["No.", "Px", "Py", "Rx", "Ry", ""]
+        col_widths = [28, 58, 58, 62, 62, 0]
         for col_idx, text in enumerate(headers):
-            lbl = ctk.CTkLabel(self.table_frame, text=text, font=ctk.CTkFont(size=11, weight="bold"))
-            lbl.grid(row=0, column=col_idx, padx=4, pady=2, sticky="ew")
-            
-        # Vẽ dữ liệu điểm
+            lbl = ctk.CTkLabel(
+                self.table_frame, text=text,
+                font=ctk.CTkFont(size=11, weight="bold"),
+                width=col_widths[col_idx]
+            )
+            lbl.grid(row=0, column=col_idx, padx=2, pady=(2, 4), sticky="ew")
+
+        # Vẽ dữ liệu điểm — mỗi dòng có Entry có thể sửa
         for idx, pt in enumerate(self.robot_calib.points):
             r = idx + 1
-            lbl_no = ctk.CTkLabel(self.table_frame, text=str(pt.index), font=ctk.CTkFont(size=11))
-            lbl_px = ctk.CTkLabel(self.table_frame, text=f"{pt.px:.0f}", font=ctk.CTkFont(size=11))
-            lbl_py = ctk.CTkLabel(self.table_frame, text=f"{pt.py:.0f}", font=ctk.CTkFont(size=11))
-            lbl_rx = ctk.CTkLabel(self.table_frame, text=f"{pt.rx:.1f}", font=ctk.CTkFont(size=11))
-            lbl_ry = ctk.CTkLabel(self.table_frame, text=f"{pt.ry:.1f}", font=ctk.CTkFont(size=11))
-            
+
+            lbl_no = ctk.CTkLabel(
+                self.table_frame, text=str(pt.index),
+                font=ctk.CTkFont(size=11, weight="bold"),
+                width=28, text_color="#00E5FF"
+            )
+
+            entry_state = "disabled" if self._table_locked else "normal"
+            entry_cfg = dict(width=58, height=26, font=ctk.CTkFont(size=11), state=entry_state)
+
+            ent_px = ctk.CTkEntry(self.table_frame, **entry_cfg)
+            ent_py = ctk.CTkEntry(self.table_frame, **entry_cfg)
+            ent_rx = ctk.CTkEntry(self.table_frame, **{**entry_cfg, "width": 62})
+            ent_ry = ctk.CTkEntry(self.table_frame, **{**entry_cfg, "width": 62})
+
+            # Điền giá trị hiện tại
+            for ent, val, fmt in [
+                (ent_px, pt.px, "{:.0f}"),
+                (ent_py, pt.py, "{:.0f}"),
+                (ent_rx, pt.rx, "{:.3f}"),
+                (ent_ry, pt.ry, "{:.3f}")
+            ]:
+                if entry_state == "normal":
+                    ent.insert(0, fmt.format(val))
+                else:
+                    ent.configure(state="normal")
+                    ent.insert(0, fmt.format(val))
+                    ent.configure(state="disabled")
+
+            # Nút Save (✅) và Delete (❌) gộp trong frame
+            btn_frame = ctk.CTkFrame(self.table_frame, fg_color="transparent")
+
+            btn_save = ctk.CTkButton(
+                btn_frame, text="✅",
+                width=26, height=24,
+                fg_color="#10B981", hover_color="#059669",
+                font=ctk.CTkFont(size=11),
+                state="disabled" if self._table_locked else "normal",
+                command=lambda p_idx=pt.index, epx=ent_px, epy=ent_py, erx=ent_rx, ery=ent_ry:
+                    self._save_point_edit(p_idx, epx, epy, erx, ery)
+            )
+            btn_save.pack(side=ctk.LEFT, padx=(0, 2))
+
             btn_del = ctk.CTkButton(
-                self.table_frame,
-                text="❌",
-                width=24,
-                height=18,
-                fg_color="#F44336",
-                hover_color="#D32F2F",
-                font=ctk.CTkFont(size=10),
+                btn_frame, text="❌",
+                width=26, height=24,
+                fg_color="#F44336", hover_color="#D32F2F",
+                font=ctk.CTkFont(size=11),
+                state="disabled" if self._table_locked else "normal",
                 command=lambda p_idx=pt.index: self.delete_point(p_idx)
             )
-            
-            lbl_no.grid(row=r, column=0, padx=4, pady=1)
-            lbl_px.grid(row=r, column=1, padx=4, pady=1)
-            lbl_py.grid(row=r, column=2, padx=4, pady=1)
-            lbl_rx.grid(row=r, column=3, padx=4, pady=1)
-            lbl_ry.grid(row=r, column=4, padx=4, pady=1)
-            btn_del.grid(row=r, column=5, padx=4, pady=1)
-            
-            self.table_row_widgets.append([lbl_no, lbl_px, lbl_py, lbl_rx, lbl_ry, btn_del])
-            
+            btn_del.pack(side=ctk.LEFT)
+
+            lbl_no.grid(row=r, column=0, padx=2, pady=2, sticky="ew")
+            ent_px.grid(row=r, column=1, padx=2, pady=2)
+            ent_py.grid(row=r, column=2, padx=2, pady=2)
+            ent_rx.grid(row=r, column=3, padx=2, pady=2)
+            ent_ry.grid(row=r, column=4, padx=2, pady=2)
+            btn_frame.grid(row=r, column=5, padx=2, pady=2)
+
+            self.table_row_widgets.append([lbl_no, ent_px, ent_py, ent_rx, ent_ry, btn_frame])
+
         # Cập nhật số điểm hiển thị
         n = len(self.robot_calib.points)
         self.lbl_points_count.configure(
-            text=f"Số lượng điểm: {n} / 9 (Tối thiểu 9 điểm)",
-            text_color="#4CAF50" if n >= 9 else ("#FF9800" if n >= 4 else "#F44336")
+            text=f"Số lượng điểm: {n} / 3 (Tối thiểu 3 điểm)",
+            text_color="#4CAF50" if n >= 3 else "#F44336"
         )
+
+    def _save_point_edit(self, index, ent_px, ent_py, ent_rx, ent_ry):
+        """Lưu giá trị được sửa trực tiếp trong bảng điểm."""
+        try:
+            px = float(ent_px.get())
+            py = float(ent_py.get())
+            rx = float(ent_rx.get())
+            ry = float(ent_ry.get())
+        except ValueError:
+            messagebox.showerror("Lỗi nhập liệu", "Giá trị nhập không hợp lệ! Vui lòng nhập số thực.")
+            return
+        self.robot_calib.update_point(index, px, py, rx, ry)
+        self._refresh_point_table()
 
     def delete_point(self, index):
         """Xóa điểm khỏi bảng."""
@@ -451,39 +526,32 @@ class CalibrationPanel(ctk.CTkFrame):
         self._refresh_point_table()
 
     def calculate_robot_matrix(self):
-        """Tính toán ma trận chuyển đổi tọa độ."""
-        method = self.opt_algorithm.get()
-        success, matrix, rms = self.robot_calib.calculate_matrix(method)
+        """Tính toán ma trận Affine (NVKCalibration) từ các điểm đã nhập."""
+        success, matrix, rms = self.robot_calib.calculate_matrix("Affine")
         
         if success:
             self.txt_robot_matrix.configure(state="normal")
             self.txt_robot_matrix.delete("1.0", ctk.END)
             
-            if method == "Homography":
-                matrix_text = f"Homography (3x3) [RMS: {rms:.2f} mm]:\n" \
-                              f"  [{matrix[0,0]:.4f}, {matrix[0,1]:.4f}, {matrix[0,2]:.4f}]\n" \
-                              f"  [{matrix[1,0]:.4f}, {matrix[1,1]:.4f}, {matrix[1,2]:.4f}]\n" \
-                              f"  [{matrix[2,0]:.4f}, {matrix[2,1]:.4f}, {matrix[2,2]:.4f}]"
-            else:
-                matrix_text = f"Affine (2x3) [RMS: {rms:.2f} mm]:\n" \
-                              f"  [{matrix[0,0]:.4f}, {matrix[0,1]:.4f}, {matrix[0,2]:.4f}]\n" \
-                              f"  [{matrix[1,0]:.4f}, {matrix[1,1]:.4f}, {matrix[1,2]:.4f}]"
+            matrix_text = (f"Affine NVK (2x3) [RMS: {rms:.4f} mm]:\n"
+                           f"  [{matrix[0,0]:.4f}, {matrix[0,1]:.4f}, {matrix[0,2]:.4f}]\n"
+                           f"  [{matrix[1,0]:.4f}, {matrix[1,1]:.4f}, {matrix[1,2]:.4f}]")
                               
             self.txt_robot_matrix.insert("1.0", matrix_text)
             self.txt_robot_matrix.configure(state="disabled")
             
             # Gửi ma trận legacy cho MainWindow hiển thị
-            legacy_matrix = self._export_legacy_matrix(matrix, method)
+            legacy_matrix = self._export_legacy_matrix(matrix, "Affine")
             if self.on_matrix_changed_callback:
                 try:
                     self.on_matrix_changed_callback(legacy_matrix)
                 except Exception as e:
                     print(f"Lỗi truyền callback: {e}")
                     
-            messagebox.showinfo("Thành công", f"Hiệu chuẩn ma trận Robot thành công!\nRMS: {rms:.2f} mm.")
+            messagebox.showinfo("Thành công", f"Hiệu chuẩn Affine (NVK) thành công!\nRMS: {rms:.4f} mm.")
         else:
-            min_req = 4 if method == "Homography" else 3
-            messagebox.showerror("Lỗi", f"Thuật toán {method} yêu cầu tối thiểu {min_req} điểm (đang có {len(self.robot_calib.points)}).")
+            messagebox.showerror("Lỗi", f"Affine yêu cầu tối thiểu 3 điểm (đang có {len(self.robot_calib.points)}).")
+
 
     def _export_legacy_matrix(self, matrix, method):
         """Tính ma trận legacy scale/shift tương thích ngược gửi Dashboard."""
@@ -568,12 +636,21 @@ class CalibrationPanel(ctk.CTkFrame):
             data = CalibrationIO.load_robot_calibration(file_path)
             if data:
                 self.robot_calib.matrix = data["matrix"]
-                self.robot_calib.method = data.get("method", "Homography")
+                self.robot_calib.method = "Affine"
                 self.robot_calib.rms_error = data.get("rms", 0.0)
                 self.robot_calib.points = data.get("points", [])
                 
+                # Khôi phục đối tượng NVK từ ma trận đã lưu (nếu có đủ điểm)
+                if len(self.robot_calib.points) >= 3:
+                    uncalib = [(pt.px, pt.py) for pt in self.robot_calib.points]
+                    calib_pts = [(pt.rx, pt.ry) for pt in self.robot_calib.points]
+                    try:
+                        from nvk_calibration import NVKCalibration as NVK
+                        self.robot_calib._nvk = NVK(uncalib, calib_pts)
+                    except Exception:
+                        pass
+                
                 # Cập nhật UI
-                self.opt_algorithm.set(self.robot_calib.method)
                 self._refresh_point_table()
                 
                 self.txt_robot_matrix.configure(state="normal")
@@ -582,15 +659,10 @@ class CalibrationPanel(ctk.CTkFrame):
                 rms = self.robot_calib.rms_error
                 method = self.robot_calib.method
                 
-                if method == "Homography":
-                    matrix_text = f"Homography (3x3) [LOADED - RMS: {rms:.2f} mm]:\n" \
-                                  f"  [{matrix[0,0]:.4f}, {matrix[0,1]:.4f}, {matrix[0,2]:.4f}]\n" \
-                                  f"  [{matrix[1,0]:.4f}, {matrix[1,1]:.4f}, {matrix[1,2]:.4f}]\n" \
-                                  f"  [{matrix[2,0]:.4f}, {matrix[2,1]:.4f}, {matrix[2,2]:.4f}]"
-                else:
-                    matrix_text = f"Affine (2x3) [LOADED - RMS: {rms:.2f} mm]:\n" \
-                                  f"  [{matrix[0,0]:.4f}, {matrix[0,1]:.4f}, {matrix[0,2]:.4f}]\n" \
-                                  f"  [{matrix[1,0]:.4f}, {matrix[1,1]:.4f}, {matrix[1,2]:.4f}]"
+                if method == "Affine" or True:  # Luôn là Affine
+                    matrix_text = (f"Affine NVK (2x3) [LOADED - RMS: {rms:.4f} mm]:\n"
+                                   f"  [{matrix[0,0]:.4f}, {matrix[0,1]:.4f}, {matrix[0,2]:.4f}]\n"
+                                   f"  [{matrix[1,0]:.4f}, {matrix[1,1]:.4f}, {matrix[1,2]:.4f}]")
                                   
                 self.txt_robot_matrix.insert("1.0", matrix_text)
                 self.txt_robot_matrix.configure(state="disabled")
@@ -608,12 +680,73 @@ class CalibrationPanel(ctk.CTkFrame):
                 messagebox.showerror("Thất bại", "Tệp tin không hợp lệ.")
 
     def has_valid_matrix(self) -> bool:
-        """Kiểm tra xem đã có ma trận Robot Calibration hợp lệ chưa."""
+        """Kiểm tra xem đã có ma trận Robot Calibration (Affine) hợp lệ chưa."""
         return self.robot_calib.matrix is not None
 
+    def has_valid_intrinsic(self) -> bool:
+        """Kiểm tra K, D từ Chessboard Calibration có hợp lệ không (rms > 0)."""
+        return self.camera_calib.intrinsic.rms > 0.0
+
+    def get_active_mode(self) -> str:
+        """Trả về chế độ calibration đang active theo radio button.
+        'chessboard' = Lens Undistortion, 'robot' = Affine Transform."""
+        return "chessboard" if self.calib_mode_var.get() == 0 else "robot"
+
+    def undistort_point(self, px: float, py: float) -> tuple:
+        """Khử méo ống kính cho tọa độ pixel đơn lẻ dùng K, D từ Chessboard.
+        Trả về (ux, uy) trong không gian pixel đã khử méo."""
+        try:
+            K = self.camera_calib.intrinsic.camera_matrix
+            D = self.camera_calib.intrinsic.dist_coeffs
+            pts = np.array([[[float(px), float(py)]]], dtype=np.float32)
+            # P=K để kết quả vẫn ở pixel space (không normalize về [-1,1])
+            undistorted = cv2.undistortPoints(pts, K, D, P=K)
+            return float(undistorted[0, 0, 0]), float(undistorted[0, 0, 1])
+        except Exception as e:
+            print(f"Lỗi undistort_point: {e}")
+            return float(px), float(py)
+
     def transform(self, px_x, px_y):
-        """Chuyển đổi tọa độ pixel camera sang tọa độ robot thực tế."""
+        """Chuyển đổi tọa độ pixel camera sang tọa độ robot thực tế (Affine)."""
         return self.robot_calib.transform(px_x, px_y)
+
+    def lock_for_running(self):
+        """Khoá toàn bộ controls Calibration khi hệ thống AI đang chạy."""
+        self._table_locked = True
+        # Khoá mode selector
+        self.rad_chessboard.configure(state="disabled")
+        self.rad_robot.configure(state="disabled")
+        # Khoá Chessboard tab controls
+        self.btn_load_images.configure(state="disabled")
+        self.btn_run_calib.configure(state="disabled")
+        self.btn_save_intrinsic.configure(state="disabled")
+        self.btn_load_intrinsic.configure(state="disabled")
+        # Khoá Robot tab controls
+        self.btn_add_pt.configure(state="disabled")
+        self.btn_calc_matrix.configure(state="disabled")
+        self.btn_save_robot.configure(state="disabled")
+        self.btn_load_robot.configure(state="disabled")
+        # Refresh bảng — các Entry và nút sẽ bị disable
+        self._refresh_point_table()
+
+    def unlock_for_editing(self):
+        """Mở khoá toàn bộ controls Calibration khi hệ thống AI dừng lại."""
+        self._table_locked = False
+        # Mở khoá mode selector
+        self.rad_chessboard.configure(state="normal")
+        self.rad_robot.configure(state="normal")
+        # Mở khoá Chessboard tab controls
+        self.btn_load_images.configure(state="normal")
+        self.btn_run_calib.configure(state="normal")
+        self.btn_save_intrinsic.configure(state="normal")
+        self.btn_load_intrinsic.configure(state="normal")
+        # Mở khoá Robot tab controls
+        self.btn_add_pt.configure(state="normal")
+        self.btn_calc_matrix.configure(state="normal")
+        self.btn_save_robot.configure(state="normal")
+        self.btn_load_robot.configure(state="normal")
+        # Refresh bảng — các Entry và nút sẽ được enable
+        self._refresh_point_table()
 
     def cleanup(self):
         """Cleanup tài nguyên (nếu có)."""

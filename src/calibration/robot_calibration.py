@@ -1,17 +1,21 @@
-import cv2
 import numpy as np
 from src.calibration.calibration_models import CalibrationPoint
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from nvk_calibration import NVKCalibration
 
 class RobotCalibration:
     """
-    Thực hiện hiệu chuẩn tọa độ Pixel sang Robot (Eye-to-Hand 2D) bằng OpenCV thực.
-    Hỗ trợ Homography (3x3) và Affine (2x3).
+    Thực hiện hiệu chuẩn tọa độ Pixel sang Robot (Eye-to-Hand 2D)
+    bằng NVKCalibration (Weighted Least Squares Affine 2D).
     """
     def __init__(self):
-        self.points = [] # Danh sách các đối tượng CalibrationPoint
-        self.matrix = None # Lưu ma trận Numpy hiện tại
-        self.method = "Homography" # "Homography" hoặc "Affine"
+        self.points = []      # Danh sách các đối tượng CalibrationPoint
+        self.matrix = None    # Ma trận Affine 2x3 numpy
+        self.method = "Affine"  # Luôn là Affine
         self.rms_error = 0.0
+        self._nvk = None      # Đối tượng NVKCalibration sau khi tính toán
 
     def add_point(self, px: float, py: float, rx: float, ry: float) -> CalibrationPoint:
         """Thêm một cặp điểm hiệu chuẩn mới."""
@@ -46,43 +50,43 @@ class RobotCalibration:
         self.matrix = None
         self.rms_error = 0.0
 
-    def calculate_matrix(self, method: str = "Homography") -> tuple:
+    def calculate_matrix(self, method: str = "Affine") -> tuple:
         """
-        Tính toán ma trận chuyển đổi từ hệ điểm hiện có.
-        Trả về (success, matrix, rms_error)
+        Tính toán ma trận Affine 2x3 bằng NVKCalibration (WLS).
+        Trả về (success, matrix_2x3_numpy, rms_error)
         """
-        self.method = method
+        self.method = "Affine"
         n_points = len(self.points)
         
-        # Kiểm tra điều kiện tối thiểu
-        min_required = 4 if method == "Homography" else 3
-        if n_points < min_required:
+        # Cần tối thiểu 3 điểm cho Affine 2D
+        if n_points < 3:
             return False, None, 0.0
 
-        # Trích xuất mảng numpy cho Pixel và Robot
-        src_pts = np.array([[pt.px, pt.py] for pt in self.points], dtype=np.float32)
-        dst_pts = np.array([[pt.rx, pt.ry] for pt in self.points], dtype=np.float32)
+        # Trích xuất danh sách điểm
+        uncalib = [(pt.px, pt.py) for pt in self.points]
+        calib   = [(pt.rx, pt.ry) for pt in self.points]
 
         try:
-            if method == "Homography":
-                # Tính ma trận Homography (3x3)
-                H, status = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
-                if H is None:
-                    return False, None, 0.0
-                self.matrix = H
-            else:
-                # Tính ma trận Affine (2x3)
-                M, status = cv2.estimateAffine2D(src_pts, dst_pts)
-                if M is None:
-                    return False, None, 0.0
-                self.matrix = M
+            self._nvk = NVKCalibration(uncalib, calib)
+            
+            # Kiểm tra ma trận hợp lệ (không suy biến)
+            if self._nvk.m00 == 0.0 and self._nvk.m11 == 0.0:
+                return False, None, 0.0
 
-            # Tính toán sai số RMS (Root Mean Square Error)
-            self.rms_error = self.calculate_rms_error()
+            # Đóng gói thành ma trận Affine 2x3 numpy (tương thích với code hiện tại)
+            M = np.array([
+                [self._nvk.m00, self._nvk.m01, self._nvk.tr_x],
+                [self._nvk.m10, self._nvk.m11, self._nvk.tr_y]
+            ], dtype=np.float64)
+            self.matrix = M
+
+            # Lấy RMSE từ NVKCalibration
+            params = self._nvk.get_affine_params()
+            self.rms_error = params["rmse"]
             return True, self.matrix, self.rms_error
 
         except Exception as e:
-            print(f"Lỗi tính toán ma trận ({method}): {e}")
+            print(f"Lỗi tính toán ma trận Affine (NVK): {e}")
             return False, None, 0.0
 
     def calculate_rms_error(self) -> float:
@@ -99,26 +103,23 @@ class RobotCalibration:
         return float(np.sqrt(sum_sq_dist / len(self.points)))
 
     def transform(self, px_x: float, px_y: float) -> tuple:
-        """Biến đổi tọa độ Pixel sang tọa độ Robot."""
+        """Biến đổi tọa độ Pixel sang tọa độ Robot bằng Affine 2D."""
+        if self._nvk is not None:
+            # Ưu tiên dùng NVKCalibration.transform() trực tiếp
+            try:
+                return self._nvk.transform((px_x, px_y))
+            except Exception as e:
+                print(f"Lỗi NVK transform: {e}")
+
         if self.matrix is None:
-            # Nếu chưa có ma trận, trả về tỉ lệ 1:1
             return float(px_x), float(px_y)
 
         try:
-            if self.method == "Homography":
-                # Phép chiếu phối cảnh 3x3
-                H = self.matrix
-                w = H[2, 0] * px_x + H[2, 1] * px_y + H[2, 2]
-                w = w if w != 0 else 1.0
-                rx = (H[0, 0] * px_x + H[0, 1] * px_y + H[0, 2]) / w
-                ry = (H[1, 0] * px_x + H[1, 1] * px_y + H[1, 2]) / w
-                return float(rx), float(ry)
-            else:
-                # Phép biến đổi Affine 2x3
-                M = self.matrix
-                rx = M[0, 0] * px_x + M[0, 1] * px_y + M[0, 2]
-                ry = M[1, 0] * px_x + M[1, 1] * px_y + M[1, 2]
-                return float(rx), float(ry)
+            # Fallback: dùng ma trận Affine 2x3 trực tiếp
+            M = self.matrix
+            rx = M[0, 0] * px_x + M[0, 1] * px_y + M[0, 2]
+            ry = M[1, 0] * px_x + M[1, 1] * px_y + M[1, 2]
+            return float(rx), float(ry)
         except Exception as e:
-            print(f"Lỗi khi thực hiện transform: {e}")
+            print(f"Lỗi khi thực hiện Affine transform: {e}")
             return float(px_x), float(px_y)

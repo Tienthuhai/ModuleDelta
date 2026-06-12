@@ -223,13 +223,19 @@ class MainWindow(ctk.CTk):
             ).start()
             
             self.control_panel.btn_start.configure(state="disabled")
+            # Khoá Calibration Panel — không cho phép thay đổi ma trận khi đang chạy
+            self.calibration_panel.lock_for_running()
+            self.log_panel.log_ai("🔒 Calibration đã bị khoá. Dừng hệ thống để thay đổi.")
 
     def stop_system(self):
         """Dừng luồng AI Worker và đặt lại trạng thái giao diện."""
         self.is_running = False
         self.camera_panel.reset_view()
         self.control_panel.btn_start.configure(state="normal")
-        self.log_panel.log_ai("Đã ra lệnh dừng luồng AI Worker.")
+        self.log_panel.log_ai("Dã ra lệnh dừng luồng AI Worker.")
+        # Mở khoá Calibration Panel — cho phép chỉnh sửa lại
+        self.calibration_panel.unlock_for_editing()
+        self.log_panel.log_ai("🔓 Calibration đã được mở khoá. Có thể thay đổi ma trận.")
 
     # --- VÒNG LẶP CẬP NHẬT GIAO DIỆN (POLLING QUEUE) ---
     def update_gui(self):
@@ -272,12 +278,19 @@ class MainWindow(ctk.CTk):
                     
                     self.statistics_panel.increment_total()
                     
-                    # Chuyển đổi tọa độ qua hiệu chuẩn nếu có ma trận hợp lệ
-                    if self.calibration_panel.has_valid_matrix():
+                    # Xác định chế độ calibration đang active theo radio button
+                    active_mode = self.calibration_panel.get_active_mode()
+
+                    if active_mode == "chessboard" and self.calibration_panel.has_valid_intrinsic():
+                        # Chế độ Chessboard: khử méo ống kính bằng K, D
+                        rx, ry = self.calibration_panel.undistort_point(cx, cy)
+                        coord_mode = "[UNDISTORTED]"
+                    elif active_mode == "robot" and self.calibration_panel.has_valid_matrix():
+                        # Chế độ Robot Affine: chuyển pixel → tọa độ robot
                         rx, ry = self.calibration_panel.transform(cx, cy)
-                        coord_mode = "[CALIBRATED]"
+                        coord_mode = "[AFFINE]"
                     else:
-                        # Gửi trực tiếp tọa độ gốc (pixel) khi chưa có Calibration
+                        # Chưa có calibration hợp lệ cho chế độ đang chọn
                         rx, ry = float(cx), float(cy)
                         coord_mode = "[RAW PIXEL]"
                         
