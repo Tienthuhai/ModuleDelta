@@ -1,4 +1,4 @@
-# Module xử lý AI luồng ngầm (YOLOv8 predict + Centroid Counting - Không dùng Tracking)
+# Module xử lý AI luồng ngầm (YOLO predict + Centroid Counting - Không dùng Tracking)
 import cv2
 import time
 import math
