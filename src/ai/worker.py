@@ -100,7 +100,7 @@ def run_ai_worker(model_path, source_type, video_filepath, data_queue, is_runnin
     - Phát hiện đối tượng bằng model.predict() (không tracking).
     - Đếm vật thể qua vạch bằng CentroidCounter.
     """
-    data_queue.put(("log", "🧠 Đang khởi tạo mô hình YOLOv8..."))
+    data_queue.put(("log", "🧠 Đang khởi tạo mô hình YOLO..."))
     try:
         model = YOLO(model_path)
     except Exception as e:
@@ -211,8 +211,8 @@ def run_ai_worker(model_path, source_type, video_filepath, data_queue, is_runnin
                 line2    = f"x:{cx} y:{cy}"
 
                 font       = cv2.FONT_HERSHEY_SIMPLEX
-                font_scale = 0.65
-                thickness  = 2
+                font_scale = 1
+                thickness  = 3
                 pad        = 6
 
                 (w1, h1), _ = cv2.getTextSize(line1, font, font_scale, thickness)
@@ -220,7 +220,7 @@ def run_ai_worker(model_path, source_type, video_filepath, data_queue, is_runnin
                 box_w = max(w1, w2) + pad * 2
                 box_h = h1 + h2 + pad * 3
 
-                label_y = max(y_min - box_h - 4, 0)
+                label_y = max(y_min - box_h - 20, 0)
                 overlay = annotated_frame.copy()
                 cv2.rectangle(overlay,
                               (x_min, label_y),

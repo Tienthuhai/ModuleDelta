@@ -194,7 +194,7 @@ class MainWindow(ctk.CTk):
         settings = self.control_panel.get_settings()
         
         if not settings["model_path"]:
-            self.log_panel.log_error("⚠️ Lỗi: Vui lòng nạp mô hình YOLOv8 (.pt) trước khi bắt đầu!")
+            self.log_panel.log_error("⚠️ Lỗi: Vui lòng nạp mô hình YOLO (.pt) trước khi bắt đầu!")
             return
             
         if settings["source_type"] == 1 and not settings["video_path"]:
