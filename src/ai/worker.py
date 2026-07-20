@@ -116,7 +116,7 @@ def run_ai_worker(model_path, source_type, video_filepath, data_queue, is_runnin
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.CAMERA_HEIGHT)
 
     data_queue.put(("log", f"▶️ Đã kết nối nguồn hình ảnh: {media_source}"))
-    data_queue.put(("log", f"⚙️ Sử dụng thiết bị: {device.upper()} | Chế độ: Phát hiện + Đếm vạch (Không tracking)"))
+    data_queue.put(("log", f"⚙️ Sử dụng thiết bị: {device.upper()} | Chế độ: Phát hiện + Đếm vạch "))
 
     counter = CentroidCounter()
 

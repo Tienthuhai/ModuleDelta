@@ -1,37 +1,12 @@
 import json
 import os
 import numpy as np
-from src.calibration.calibration_models import CalibrationPoint, CameraIntrinsic
+from src.calibration.calibration_models import CalibrationPoint
 
 class CalibrationIO:
     """
-    Lớp quản lý lưu/nạp các cấu hình hiệu chuẩn Camera và Robot dưới dạng JSON.
+    Lớp quản lý lưu/nạp cấu hình hiệu chuẩn Robot dưới dạng JSON.
     """
-    @staticmethod
-    def save_camera_intrinsic(file_path: str, intrinsic: CameraIntrinsic) -> bool:
-        """Lưu các tham số nội camera ra file JSON."""
-        try:
-            data = intrinsic.to_dict()
-            with open(file_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=4)
-            return True
-        except Exception as e:
-            print(f"Lỗi khi lưu camera intrinsic: {e}")
-            return False
-
-    @staticmethod
-    def load_camera_intrinsic(file_path: str) -> CameraIntrinsic:
-        """Nạp các tham số nội camera từ file JSON."""
-        try:
-            if not os.path.exists(file_path):
-                return None
-            with open(file_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            return CameraIntrinsic.from_dict(data)
-        except Exception as e:
-            print(f"Lỗi khi nạp camera intrinsic: {e}")
-            return None
-
     @staticmethod
     def save_robot_calibration(file_path: str, matrix: np.ndarray, points: list, method: str, rms: float) -> bool:
         """Lưu ma trận chuyển đổi và danh sách điểm robot ra file JSON."""

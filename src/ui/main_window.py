@@ -8,7 +8,7 @@ import serial
 from src.ui.camera_panel import CameraPanel
 from src.ui.control_panel import ControlPanel
 from src.ui.robot_panel import RobotPanel
-from src.ui.calibration_panel import CalibrationPanel
+from src.calibration.calibration_panel import CalibrationPanel
 from src.ui.statistics_panel import StatisticsPanel
 from src.ui.log_panel import LogPanel
 from src.ai.worker import run_ai_worker
@@ -318,12 +318,7 @@ class MainWindow(ctk.CTk):
 
                     self.statistics_panel.increment_total()
 
-                    active_mode = self.calibration_panel.get_active_mode()
-
-                    if active_mode == "chessboard" and self.calibration_panel.has_valid_intrinsic():
-                        rx, ry = self.calibration_panel.undistort_point(cx, cy)
-                        coord_mode = "[UNDISTORTED]"
-                    elif active_mode == "robot" and self.calibration_panel.has_valid_matrix():
+                    if self.calibration_panel.has_valid_matrix():
                         rx, ry = self.calibration_panel.transform(cx, cy)
                         coord_mode = "[AFFINE]"
                     else:
